@@ -8,9 +8,23 @@ async function bootstrap() {
   const config = app.get(ConfigService);
 
   app.enableCors({
-    origin: config.get<string>('CORS_ORIGIN'),
-    credentials: true,
-  })
+  origin: (origin, callback) => {
+    const allowedOrigins =
+      config.get<string>('CORS_ORIGINS')?.split(',').map(o => o.trim()) || [];
+
+    console.log('🌍 Request Origin:', origin);
+    console.log('✅ Allowed Origins:', allowedOrigins);
+
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`❌ CORS blocked: ${origin}`);
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true,
+});
+
 
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({
@@ -20,7 +34,7 @@ async function bootstrap() {
     transformOptions: { enableImplicitConversion: true },
   }));
   const port = config.get<number>('PORT') || 4000;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   console.log(`🚀 Server running on http://localhost:${port}/api`);
 }

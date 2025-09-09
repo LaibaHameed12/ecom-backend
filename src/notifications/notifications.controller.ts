@@ -14,7 +14,7 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(private readonly notificationsService: NotificationsService) { }
 
   // GET /notifications
   @Get()
@@ -33,9 +33,7 @@ export class NotificationsController {
 
   // DELETE /notifications/:id
   @Delete(':id')
-  async deleteNotification(@Param('id') id: string) {
-    const deleted = await this.notificationsService['notificationModel'].findByIdAndDelete(id);
-    if (!deleted) throw new NotFoundException('Notification not found');
-    return { success: true, id };
+  deleteNotification(@Param('id') id: string) {
+    return this.notificationsService.deleteNotification(id);
   }
 }

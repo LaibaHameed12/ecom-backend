@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Notification, NotificationDocument, NotificationType } from './schemas/notification.schema';
@@ -43,4 +43,11 @@ export class NotificationsService {
     async getUserNotifications(userId: string) {
         return this.notificationModel.find({ user: userId }).sort({ createdAt: -1 }).exec();
     }
+
+    async deleteNotification(notificationId: string) {
+        const deleted = await this.notificationModel.findByIdAndDelete(notificationId);
+        if (!deleted) throw new NotFoundException('Notification not found');
+        return deleted;
+    }
+
 }
