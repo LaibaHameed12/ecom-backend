@@ -5,10 +5,10 @@ import { Server } from 'socket.io';
 export class SalesGateway {
     @WebSocketServer() server: Server;
 
-    broadcastSaleStarted() {
-        this.server.emit('saleStarted', { ts: new Date().toISOString() });
+    broadcastSaleStarted(payload: any) {
+        this.server.emit('saleStarted', payload);
     }
-    broadcastSaleEnded() {
-        this.server.emit('saleEnded', { ts: new Date().toISOString() });
+    broadcastSaleEnded(payload: any) {
+        this.server.emit('saleEnded', payload);
     }
 }

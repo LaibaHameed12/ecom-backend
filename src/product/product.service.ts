@@ -202,14 +202,16 @@ export class ProductService {
         product.sale = { isOnSale: true, ...saleData };
         await product.save();
 
-        // 🔔 Notify all users that sale is live
-        this.notificationService.notifyAll(
-            'Sale Live!',
-            `${product.title} is now on sale!`,
-            product._id,
-        );
-        this.salesGateway.broadcastSaleStarted();
-        
+        const title = `Sale live: ${product.title}`;
+        const message = `${saleData.discount}% off until ${saleData.endsAt ?? 'soon'}`;
+        // persist + emit notification to default namespace (notifications list)
+        await this.notificationService.notifyAll(title, message, product._id);
+        this.salesGateway.broadcastSaleStarted({
+            productId: product._id.toString(),
+            productName: product.title,
+            sale: saleData,
+        });
+
         return product;
     }
 

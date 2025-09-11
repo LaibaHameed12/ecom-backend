@@ -127,74 +127,79 @@ export class OrderService {
     }
 
     async update(id: string, updateOrderDto: UpdateOrderDto): Promise<Order> {
-    if (!Types.ObjectId.isValid(id)) {
-        throw new BadRequestException('Invalid order ID');
-    }
-
-    const order = await this.orderModel.findById(id).exec();
-    if (!order) throw new NotFoundException('Order not found');
-
-    const prevStatus = order.status;
-    const updateData: any = {};
-
-    if (updateOrderDto.status !== undefined) {
-        updateData.status = updateOrderDto.status;
-
-        if (prevStatus !== updateOrderDto.status) {
-            updateData.$push = {
-                statusHistory: {
-                    status: updateOrderDto.status,
-                    changedAt: new Date(),
-                }
-            };
+        if (!Types.ObjectId.isValid(id)) {
+            throw new BadRequestException('Invalid order ID');
         }
 
-        // ✅ Notify about status change
-        await this.notificationService.notifyUser(
-            order.user.toString(),
-            'Order Status Updated',
-            `Your order #${order._id} status has been updated to ${updateOrderDto.status}.`,
-            NotificationType.ORDER,
-            order._id,
-        );
+        const order = await this.orderModel.findById(id).exec();
+        if (!order) throw new NotFoundException('Order not found');
 
-        // ✅ If delivered, grant points and notify
-        if (prevStatus !== OrderStatus.DELIVERED && updateOrderDto.status === OrderStatus.DELIVERED) {
-            if (order.paymentMethod !== 'points') {
-                const user = await this.userModel.findById(order.user);
-                if (user) {
-                    const earnedPoints = Math.floor(order.totalAmount / 500);
-                    user.loyaltyPoints += earnedPoints;
-                    await user.save();
+        const prevStatus = order.status;
+        const updateData: any = {};
 
-                    // Notify about granted points
-                    await this.notificationService.notifyUser(
-                        String(user._id),
-                        'Loyalty Points Granted',
-                        `You earned ${earnedPoints} loyalty points for completing your order.`,
-                        NotificationType.LOYALTY,
-                        order._id,
-                    );
-                }
+        if (updateOrderDto.status !== undefined) {
+            // ❌ Prevent status change if already delivered or cancelled
+            if ([OrderStatus.DELIVERED, OrderStatus.CANCELLED].includes(order.status)) {
+                throw new BadRequestException(
+                    `Order status cannot be changed once it is ${order.status}.`,
+                );
             }
-            updateData.deliveredAt = new Date();
+
+            updateData.status = updateOrderDto.status;
+
+            if (prevStatus !== updateOrderDto.status) {
+                updateData.$push = {
+                    statusHistory: {
+                        status: updateOrderDto.status,
+                        changedAt: new Date(),
+                    }
+                };
+            }
+
+            // ✅ Notify about status change
+            await this.notificationService.notifyUser(
+                order.user.toString(),
+                'Order Status Updated',
+                `Your order #${order._id} status has been updated to ${updateOrderDto.status}.`,
+                NotificationType.ORDER,
+                order._id,
+            );
+
+            // ✅ If delivered, grant points and notify
+            if (prevStatus !== OrderStatus.DELIVERED && updateOrderDto.status === OrderStatus.DELIVERED) {
+                if (order.paymentMethod !== 'points') {
+                    const user = await this.userModel.findById(order.user);
+                    if (user) {
+                        const earnedPoints = Math.floor(order.totalAmount / 500);
+                        user.loyaltyPoints += earnedPoints;
+                        await user.save();
+
+                        // Notify about granted points
+                        await this.notificationService.notifyUser(
+                            String(user._id),
+                            'Loyalty Points Granted',
+                            `You earned ${earnedPoints} loyalty points for completing your order.`,
+                            NotificationType.LOYALTY,
+                            order._id,
+                        );
+                    }
+                }
+                updateData.deliveredAt = new Date();
+            }
         }
+
+        const updatedOrder = await this.orderModel
+            .findByIdAndUpdate(id, updateData, { new: true })
+            .populate('user', 'name email loyaltyPoints')
+            .populate('items.product', 'title price images')
+            .exec();
+
+        if (!updatedOrder) {
+            throw new NotFoundException('Order not found after update');
+        }
+
+        return updatedOrder;
     }
-
-    const updatedOrder = await this.orderModel
-        .findByIdAndUpdate(id, updateData, { new: true })
-        .populate('user', 'name email loyaltyPoints')
-        .populate('items.product', 'title price images')
-        .exec();
-
-    if (!updatedOrder) {
-        throw new NotFoundException('Order not found after update');
-    }
-
-    return updatedOrder;
-}
-
-
 
     async delete(id: string): Promise<void> {
         if (!Types.ObjectId.isValid(id)) {

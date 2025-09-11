@@ -63,7 +63,7 @@ export class ProductController {
     @UploadedFiles() files: Express.Multer.File[],
   ): Promise<Product> {
 
-    console.log(createProductDto);
+    // console.log(createProductDto);
     let imageUrls: string[] = [];
 
     if (!files || files.length === 0) {
