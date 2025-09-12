@@ -13,6 +13,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { NotificationsService } from 'src/notifications/notifications.service';
 import { NotificationType } from 'src/notifications/schemas/notification.schema';
 import { ProductService } from 'src/product/product.service';
+import { StripeService } from 'src/stripe/stripe.service';
 
 @Injectable()
 export class OrderService {
@@ -20,7 +21,8 @@ export class OrderService {
         @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
         @InjectModel(User.name) private userModel: Model<UserDocument>,
         private readonly notificationService: NotificationsService,
-        private readonly productService: ProductService
+        private readonly productService: ProductService,
+        private readonly stripeService: StripeService,
     ) { }
 
     async create(userId: string, createOrderDto: CreateOrderDto): Promise<Order> {
@@ -32,64 +34,72 @@ export class OrderService {
         const user = await this.userModel.findById(userId);
         if (!user) throw new NotFoundException('User not found');
 
-        // prevent admins and superadmins from placing orders
+        // Prevent admins and superadmins from placing orders
         if (user.roles?.includes('admin') || user.roles?.includes('superadmin')) {
             throw new ForbiddenException('Admins cannot place orders');
         }
 
+        // ✅ Calculate total amount
+        const totalAmount = createOrderDto.items.reduce(
+            (sum, item) => sum + item.price * item.quantity,
+            0,
+        );
 
-        // ✅ Calculate total amount (in Rs) and points required if using points
-        const totalAmount = createOrderDto.items.reduce((sum, item) => {
-            return sum + item.price * item.quantity;
-        }, 0);
-
-        // If paying with points
         if (createOrderDto.paymentMethod === 'points') {
+            // 🟢 Points flow
             const requiredPoints = Math.ceil(totalAmount / 250);
             if (user.loyaltyPoints < requiredPoints) {
                 throw new BadRequestException('Insufficient points balance');
             }
+
+            // Deduct points
             user.loyaltyPoints -= requiredPoints;
             await user.save();
-        }
 
-        // ✅ Decrement stock for each product variant
-        for (const item of createOrderDto.items) {
-            await this.productService.updateVariantStock(
-                item.product,  // productId
-                item.size,
-                item.color,
-                item.quantity,
-            );
-        }
+            // Create order directly as PAID
+            const order = new this.orderModel({
+                ...createOrderDto,
+                totalAmount,
+                totalPointsUsed: requiredPoints,
+                user: new Types.ObjectId(userId),
+                status: OrderStatus.PAID,
+                statusHistory: [{ status: OrderStatus.PAID, changedAt: new Date() }],
+            });
 
-        const newOrder = new this.orderModel({
-            ...createOrderDto,
-            totalAmount,
-            user: new Types.ObjectId(userId),
-            status: createOrderDto.status ?? OrderStatus.PENDING,
-        });
+            // Decrement stock
+            for (const item of createOrderDto.items) {
+                await this.productService.updateVariantStock(
+                    String(item.product),
+                    item.size,
+                    item.color,
+                    item.quantity,
+                );
+            }
 
-        // Notify user after order creation
-        if (createOrderDto.paymentMethod === 'points') {
-            const requiredPoints = Math.ceil(totalAmount / 100);
+            // Notify user
             await this.notificationService.notifyUser(
                 userId,
                 'Loyalty Points Deducted',
                 `${requiredPoints} points have been deducted from your account for this order.`,
                 NotificationType.LOYALTY,
-                newOrder._id,
+                order._id,
             );
+
+            return await order.save();
         }
 
-        return await newOrder.save();
+        // ⚠️ DO NOT create PaymentIntent manually here.
+        // Stripe Checkout Session (in stripe.service.ts) will handle paymentIntent creation.
+        throw new BadRequestException(
+            'Card payments must go through Stripe checkout session',
+        );
     }
 
     async findAll(user: any): Promise<Order[]> {
         if (user.roles.includes('admin') || user.roles.includes('superadmin')) {
             return this.orderModel
                 .find()
-                .populate('user', 'name email pointsBalance')
+                .populate('user', 'name email loyaltyPoints')
                 .populate('items.product', 'title price images')
                 .exec();
         }
@@ -107,7 +117,7 @@ export class OrderService {
 
         const order = await this.orderModel
             .findById(id)
-            .populate('user', 'name email pointsBalance')
+            .populate('user', 'name email loyaltyPoints')
             .populate('items.product', 'title price images')
             .exec();
 
@@ -152,7 +162,7 @@ export class OrderService {
                     statusHistory: {
                         status: updateOrderDto.status,
                         changedAt: new Date(),
-                    }
+                    },
                 };
             }
 
@@ -165,8 +175,11 @@ export class OrderService {
                 order._id,
             );
 
-            // ✅ If delivered, grant points and notify
-            if (prevStatus !== OrderStatus.DELIVERED && updateOrderDto.status === OrderStatus.DELIVERED) {
+            // ✅ If delivered, grant points
+            if (
+                prevStatus !== OrderStatus.DELIVERED &&
+                updateOrderDto.status === OrderStatus.DELIVERED
+            ) {
                 if (order.paymentMethod !== 'points') {
                     const user = await this.userModel.findById(order.user);
                     if (user) {
@@ -174,7 +187,6 @@ export class OrderService {
                         user.loyaltyPoints += earnedPoints;
                         await user.save();
 
-                        // Notify about granted points
                         await this.notificationService.notifyUser(
                             String(user._id),
                             'Loyalty Points Granted',
